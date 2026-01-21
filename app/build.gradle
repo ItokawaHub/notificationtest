@@ -49,6 +49,9 @@ dependencies {
     implementation platform(libs.firebase.bom)
     implementation libs.firebase.messaging
     implementation libs.firebase.analytics
+
+    // OkHttp for FCM API requests
+    implementation libs.okhttp
     implementation libs.androidx.compose.ui
     implementation libs.androidx.compose.ui.graphics
     implementation libs.androidx.compose.ui.tooling.preview
