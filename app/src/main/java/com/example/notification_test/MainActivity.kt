@@ -14,6 +14,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -25,7 +26,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -54,6 +57,17 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+
+/**
+ * メッセージタイプを表すデータクラス
+ */
+data class FcmMessageConfig(
+    val includeNotification: Boolean = true,
+    val includeData: Boolean = false,
+    val includeFcmOptions: Boolean = true,
+    val includeAndroidConfig: Boolean = true,
+    val channelId: String = "default_channel"
+)
 
 class MainActivity : ComponentActivity() {
 
@@ -101,8 +115,8 @@ class MainActivity : ComponentActivity() {
                         hasServiceAccount = hasServiceAccount,
                         onAccessTokenChange = { accessToken = it },
                         onGetAccessToken = { fetchAccessToken() },
-                        onSendNotification = { title, body, analyticsLabel ->
-                            sendFcmNotification(accessToken, title, body, analyticsLabel)
+                        onSendNotification = { title, body, dataPayload, analyticsLabel, config ->
+                            sendFcmNotification(accessToken, title, body, dataPayload, analyticsLabel, config)
                         },
                         modifier = Modifier.padding(innerPadding)
                     )
@@ -178,7 +192,14 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun sendFcmNotification(accessToken: String, title: String, body: String, analyticsLabel: String) {
+    private fun sendFcmNotification(
+        accessToken: String,
+        title: String,
+        body: String,
+        dataPayload: Map<String, String>,
+        analyticsLabel: String,
+        config: FcmMessageConfig
+    ) {
         if (accessToken.isBlank()) {
             Toast.makeText(this, "Access Tokenを取得してください", Toast.LENGTH_SHORT).show()
             return
@@ -193,20 +214,45 @@ class MainActivity : ComponentActivity() {
             try {
                 val client = OkHttpClient()
 
-                val jsonBody = JSONObject().apply {
-                    put("message", JSONObject().apply {
-                        put("token", fcmToken)
+                val messageJson = JSONObject().apply {
+                    put("token", fcmToken)
+
+                    // notification ペイロード
+                    if (config.includeNotification) {
                         put("notification", JSONObject().apply {
                             put("title", title)
                             put("body", body)
                         })
-                        // Analytics labelを追加してFirebase Consoleのレポートに集計
-                        if (analyticsLabel.isNotBlank()) {
-                            put("fcm_options", JSONObject().apply {
-                                put("analytics_label", analyticsLabel)
+                    }
+
+                    // data ペイロード
+                    if (config.includeData && dataPayload.isNotEmpty()) {
+                        put("data", JSONObject().apply {
+                            dataPayload.forEach { (key, value) ->
+                                put(key, value)
+                            }
+                        })
+                    }
+
+                    // android 固有設定（channel_id など）
+                    if (config.includeAndroidConfig && config.channelId.isNotBlank()) {
+                        put("android", JSONObject().apply {
+                            put("notification", JSONObject().apply {
+                                put("channel_id", config.channelId)
                             })
-                        }
-                    })
+                        })
+                    }
+
+                    // fcm_options
+                    if (config.includeFcmOptions && analyticsLabel.isNotBlank()) {
+                        put("fcm_options", JSONObject().apply {
+                            put("analytics_label", analyticsLabel)
+                        })
+                    }
+                }
+
+                val jsonBody = JSONObject().apply {
+                    put("message", messageJson)
                 }
 
                 val requestBody = jsonBody.toString()
@@ -261,23 +307,68 @@ fun MainContent(
     hasServiceAccount: Boolean,
     onAccessTokenChange: (String) -> Unit,
     onGetAccessToken: () -> Unit,
-    onSendNotification: (title: String, body: String, analyticsLabel: String) -> Unit,
+    onSendNotification: (title: String, body: String, dataPayload: Map<String, String>, analyticsLabel: String, config: FcmMessageConfig) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val clipboardManager = LocalClipboardManager.current
     val scrollState = rememberScrollState()
 
+    // Notification設定
     var notificationTitle by remember { mutableStateOf("Test Notification") }
-    var notificationBody by remember { mutableStateOf("This is a test notification from the app") }
+    var notificationBody by remember { mutableStateOf("This is a test notification") }
+
+    // Data設定
+    var dataKey1 by remember { mutableStateOf("action") }
+    var dataValue1 by remember { mutableStateOf("OPEN_DETAIL") }
+    var dataKey2 by remember { mutableStateOf("item_id") }
+    var dataValue2 by remember { mutableStateOf("12345") }
+
+    // fcm_options設定
     var analyticsLabel by remember { mutableStateOf("test_campaign") }
+
+    // メッセージタイプ設定
+    var includeNotification by remember { mutableStateOf(true) }
+    var includeData by remember { mutableStateOf(false) }
+    var includeAndroidConfig by remember { mutableStateOf(true) }
+    var includeFcmOptions by remember { mutableStateOf(true) }
+
+    // Android固有設定
+    var channelId by remember { mutableStateOf("default_channel") }
+
     var isSending by remember { mutableStateOf(false) }
 
-    // JSONペイロードを生成（fcm_optionsあり/なし）
-    val jsonPayloadWithOptions = remember(fcmToken, notificationTitle, notificationBody, analyticsLabel) {
-        buildJsonPayload(fcmToken, notificationTitle, notificationBody, analyticsLabel, includeFcmOptions = true)
+    // データペイロードをMapに変換
+    val dataPayload = remember(dataKey1, dataValue1, dataKey2, dataValue2) {
+        buildMap {
+            if (dataKey1.isNotBlank() && dataValue1.isNotBlank()) {
+                put(dataKey1, dataValue1)
+            }
+            if (dataKey2.isNotBlank() && dataValue2.isNotBlank()) {
+                put(dataKey2, dataValue2)
+            }
+        }
     }
-    val jsonPayloadWithoutOptions = remember(fcmToken, notificationTitle, notificationBody) {
-        buildJsonPayload(fcmToken, notificationTitle, notificationBody, "", includeFcmOptions = false)
+
+    // JSONペイロードを生成
+    val jsonPayload = remember(
+        fcmToken, notificationTitle, notificationBody,
+        dataPayload, analyticsLabel, channelId,
+        includeNotification, includeData, includeAndroidConfig, includeFcmOptions
+    ) {
+        buildJsonPayload(
+            token = fcmToken,
+            title = notificationTitle,
+            body = notificationBody,
+            dataPayload = dataPayload,
+            analyticsLabel = analyticsLabel,
+            config = FcmMessageConfig(
+                includeNotification = includeNotification,
+                includeData = includeData,
+                includeFcmOptions = includeFcmOptions,
+                includeAndroidConfig = includeAndroidConfig,
+                channelId = channelId
+            )
+        )
     }
 
     Column(
@@ -304,9 +395,14 @@ fun MainContent(
             Text("Copy Token")
         }
 
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(24.dp))
+        HorizontalDivider()
+        Spacer(modifier = Modifier.height(16.dp))
 
-        Text(text = "--- FCM API Test ---")
+        Text(
+            text = "--- FCM API Test ---",
+            style = MaterialTheme.typography.titleMedium
+        )
 
         Spacer(modifier = Modifier.height(16.dp))
 
@@ -340,7 +436,7 @@ fun MainContent(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Access Token表示（読み取り専用風）
+        // Access Token表示
         OutlinedTextField(
             value = if (accessToken.length > 50) "${accessToken.take(50)}..." else accessToken,
             onValueChange = onAccessTokenChange,
@@ -358,92 +454,183 @@ fun MainContent(
             )
         }
 
+        Spacer(modifier = Modifier.height(24.dp))
+        HorizontalDivider()
         Spacer(modifier = Modifier.height(16.dp))
 
-        OutlinedTextField(
-            value = notificationTitle,
-            onValueChange = { notificationTitle = it },
-            label = { Text("Notification Title") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        OutlinedTextField(
-            value = notificationBody,
-            onValueChange = { notificationBody = it },
-            label = { Text("Notification Body") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        OutlinedTextField(
-            value = analyticsLabel,
-            onValueChange = { analyticsLabel = it },
-            label = { Text("Analytics Label (for Reports)") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // JSONペイロードプレビュー（fcm_optionsあり）
+        // メッセージタイプ選択
         Text(
-            text = "Payload WITH fcm_options:",
+            text = "Message Type:",
             style = MaterialTheme.typography.titleSmall,
             modifier = Modifier.align(Alignment.Start)
         )
-        Spacer(modifier = Modifier.height(4.dp))
 
-        val horizontalScrollState1 = rememberScrollState()
-        Text(
-            text = jsonPayloadWithOptions,
-            style = MaterialTheme.typography.bodySmall,
-            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    shape = RoundedCornerShape(8.dp)
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(
+                    checked = includeNotification,
+                    onCheckedChange = { includeNotification = it }
                 )
-                .padding(12.dp)
-                .horizontalScroll(horizontalScrollState1)
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Button(
-            onClick = {
-                isSending = true
-                onSendNotification(notificationTitle, notificationBody, analyticsLabel)
-                isSending = false
-            },
-            enabled = !isSending && accessToken.isNotBlank(),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            if (isSending) {
-                CircularProgressIndicator(modifier = Modifier.size(20.dp))
-            } else {
-                Text("Send WITH fcm_options")
+                Text("notification")
+                Spacer(modifier = Modifier.width(8.dp))
+                Checkbox(
+                    checked = includeData,
+                    onCheckedChange = { includeData = it }
+                )
+                Text("data")
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(
+                    checked = includeAndroidConfig,
+                    onCheckedChange = { includeAndroidConfig = it }
+                )
+                Text("android")
+                Spacer(modifier = Modifier.width(8.dp))
+                Checkbox(
+                    checked = includeFcmOptions,
+                    onCheckedChange = { includeFcmOptions = it }
+                )
+                Text("fcm_options")
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
-        // JSONペイロードプレビュー（fcm_optionsなし）
+        // Notification設定
+        if (includeNotification) {
+            Text(
+                text = "Notification Payload:",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.align(Alignment.Start)
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedTextField(
+                value = notificationTitle,
+                onValueChange = { notificationTitle = it },
+                label = { Text("title") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedTextField(
+                value = notificationBody,
+                onValueChange = { notificationBody = it },
+                label = { Text("body") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        // Data設定
+        if (includeData) {
+            Text(
+                text = "Data Payload:",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.align(Alignment.Start)
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(modifier = Modifier.fillMaxWidth()) {
+                OutlinedTextField(
+                    value = dataKey1,
+                    onValueChange = { dataKey1 = it },
+                    label = { Text("key") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                OutlinedTextField(
+                    value = dataValue1,
+                    onValueChange = { dataValue1 = it },
+                    label = { Text("value") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(modifier = Modifier.fillMaxWidth()) {
+                OutlinedTextField(
+                    value = dataKey2,
+                    onValueChange = { dataKey2 = it },
+                    label = { Text("key") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                OutlinedTextField(
+                    value = dataValue2,
+                    onValueChange = { dataValue2 = it },
+                    label = { Text("value") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true
+                )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        // Android固有設定
+        if (includeAndroidConfig) {
+            Text(
+                text = "Android Config:",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.align(Alignment.Start)
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedTextField(
+                value = channelId,
+                onValueChange = { channelId = it },
+                label = { Text("notification.channel_id") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        // fcm_options設定
+        if (includeFcmOptions) {
+            Text(
+                text = "fcm_options:",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.align(Alignment.Start)
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedTextField(
+                value = analyticsLabel,
+                onValueChange = { analyticsLabel = it },
+                label = { Text("analytics_label") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        // JSONペイロードプレビュー
         Text(
-            text = "Payload WITHOUT fcm_options:",
+            text = "Request Payload Preview:",
             style = MaterialTheme.typography.titleSmall,
             modifier = Modifier.align(Alignment.Start)
         )
         Spacer(modifier = Modifier.height(4.dp))
 
-        val horizontalScrollState2 = rememberScrollState()
+        val horizontalScrollState = rememberScrollState()
         Text(
-            text = jsonPayloadWithoutOptions,
+            text = jsonPayload,
             style = MaterialTheme.typography.bodySmall,
             fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
             modifier = Modifier
@@ -453,25 +640,42 @@ fun MainContent(
                     shape = RoundedCornerShape(8.dp)
                 )
                 .padding(12.dp)
-                .horizontalScroll(horizontalScrollState2)
+                .horizontalScroll(horizontalScrollState)
         )
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
+        // 送信ボタン
         Button(
             onClick = {
                 isSending = true
-                // analyticsLabelを空にして送信（fcm_optionsなし）
-                onSendNotification(notificationTitle, notificationBody, "")
+                onSendNotification(
+                    notificationTitle,
+                    notificationBody,
+                    dataPayload,
+                    analyticsLabel,
+                    FcmMessageConfig(
+                        includeNotification = includeNotification,
+                        includeData = includeData,
+                        includeFcmOptions = includeFcmOptions,
+                        includeAndroidConfig = includeAndroidConfig,
+                        channelId = channelId
+                    )
+                )
                 isSending = false
             },
-            enabled = !isSending && accessToken.isNotBlank(),
+            enabled = !isSending && accessToken.isNotBlank() && (includeNotification || includeData),
             modifier = Modifier.fillMaxWidth()
         ) {
             if (isSending) {
                 CircularProgressIndicator(modifier = Modifier.size(20.dp))
             } else {
-                Text("Send WITHOUT fcm_options")
+                val typeText = buildString {
+                    if (includeNotification) append("notification")
+                    if (includeNotification && includeData) append(" + ")
+                    if (includeData) append("data")
+                }
+                Text("Send ($typeText)")
             }
         }
 
@@ -486,8 +690,9 @@ private fun buildJsonPayload(
     token: String,
     title: String,
     body: String,
+    dataPayload: Map<String, String>,
     analyticsLabel: String,
-    includeFcmOptions: Boolean
+    config: FcmMessageConfig
 ): String {
     val tokenDisplay = if (token.length > 20) "${token.take(20)}..." else token
 
@@ -495,17 +700,65 @@ private fun buildJsonPayload(
         appendLine("{")
         appendLine("  \"message\": {")
         appendLine("    \"token\": \"$tokenDisplay\",")
-        appendLine("    \"notification\": {")
-        appendLine("      \"title\": \"$title\",")
-        appendLine("      \"body\": \"$body\"")
-        if (includeFcmOptions) {
-            appendLine("    },")
-            appendLine("    \"fcm_options\": {")
-            appendLine("      \"analytics_label\": \"$analyticsLabel\"")
-            appendLine("    }")
-        } else {
-            appendLine("    }")
+
+        val parts = mutableListOf<String>()
+
+        // notification
+        if (config.includeNotification) {
+            parts.add(buildString {
+                appendLine("    \"notification\": {")
+                appendLine("      \"title\": \"$title\",")
+                appendLine("      \"body\": \"$body\"")
+                append("    }")
+            })
         }
+
+        // data
+        if (config.includeData && dataPayload.isNotEmpty()) {
+            parts.add(buildString {
+                appendLine("    \"data\": {")
+                val dataEntries = dataPayload.entries.toList()
+                dataEntries.forEachIndexed { index, (key, value) ->
+                    if (index < dataEntries.size - 1) {
+                        appendLine("      \"$key\": \"$value\",")
+                    } else {
+                        appendLine("      \"$key\": \"$value\"")
+                    }
+                }
+                append("    }")
+            })
+        }
+
+        // android (channel_id)
+        if (config.includeAndroidConfig && config.channelId.isNotBlank()) {
+            parts.add(buildString {
+                appendLine("    \"android\": {")
+                appendLine("      \"notification\": {")
+                appendLine("        \"channel_id\": \"${config.channelId}\"")
+                appendLine("      }")
+                append("    }")
+            })
+        }
+
+        // fcm_options
+        if (config.includeFcmOptions && analyticsLabel.isNotBlank()) {
+            parts.add(buildString {
+                appendLine("    \"fcm_options\": {")
+                appendLine("      \"analytics_label\": \"$analyticsLabel\"")
+                append("    }")
+            })
+        }
+
+        // パーツを結合
+        parts.forEachIndexed { index, part ->
+            append(part)
+            if (index < parts.size - 1) {
+                appendLine(",")
+            } else {
+                appendLine()
+            }
+        }
+
         appendLine("  }")
         append("}")
     }
@@ -522,7 +775,7 @@ fun MainContentPreview() {
             hasServiceAccount = true,
             onAccessTokenChange = {},
             onGetAccessToken = {},
-            onSendNotification = { _, _, _ -> }
+            onSendNotification = { _, _, _, _, _ -> }
         )
     }
 }

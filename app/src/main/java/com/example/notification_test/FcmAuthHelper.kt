@@ -76,23 +76,13 @@ object FcmAuthHelper {
         val expiry = now + 3600 // 1時間後
 
         // JWTヘッダー
-        val header = JSONObject().apply {
-            put("alg", "RS256")
-            put("typ", "JWT")
-        }
+        val headerJson = """{"alg":"RS256","typ":"JWT"}"""
 
         // JWTペイロード
-        val payload = JSONObject().apply {
-            put("iss", clientEmail)
-            put("sub", clientEmail)
-            put("aud", TOKEN_URL)
-            put("iat", now)
-            put("exp", expiry)
-            put("scope", FCM_SCOPE)
-        }
+        val payloadJson = """{"iss":"$clientEmail","sub":"$clientEmail","aud":"$TOKEN_URL","iat":$now,"exp":$expiry,"scope":"$FCM_SCOPE"}"""
 
-        val headerBase64 = base64UrlEncode(header.toString().toByteArray())
-        val payloadBase64 = base64UrlEncode(payload.toString().toByteArray())
+        val headerBase64 = base64UrlEncode(headerJson.toByteArray(Charsets.UTF_8))
+        val payloadBase64 = base64UrlEncode(payloadJson.toByteArray(Charsets.UTF_8))
         val signatureInput = "$headerBase64.$payloadBase64"
 
         // RSA署名
@@ -109,6 +99,8 @@ object FcmAuthHelper {
             .replace("-----END PRIVATE KEY-----", "")
             .replace("\\n", "")
             .replace("\n", "")
+            .replace("\r", "")
+            .replace(" ", "")
             .trim()
 
         val keyBytes = Base64.decode(privateKeyContent, Base64.DEFAULT)
@@ -119,7 +111,7 @@ object FcmAuthHelper {
         // SHA256withRSAで署名
         val signature = Signature.getInstance("SHA256withRSA")
         signature.initSign(privateKey)
-        signature.update(data.toByteArray())
+        signature.update(data.toByteArray(Charsets.UTF_8))
         return signature.sign()
     }
 
