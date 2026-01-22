@@ -670,12 +670,13 @@ fun MainContent(
             if (isSending) {
                 CircularProgressIndicator(modifier = Modifier.size(20.dp))
             } else {
-                val typeText = buildString {
-                    if (includeNotification) append("notification")
-                    if (includeNotification && includeData) append(" + ")
-                    if (includeData) append("data")
+                val types = buildList {
+                    if (includeNotification) add("notification")
+                    if (includeData) add("data")
+                    if (includeAndroidConfig) add("android")
+                    if (includeFcmOptions) add("fcm_options")
                 }
-                Text("Send ($typeText)")
+                Text("Send (${types.joinToString(" + ")})")
             }
         }
 
